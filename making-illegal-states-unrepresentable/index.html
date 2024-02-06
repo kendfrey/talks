@@ -1,0 +1,774 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Making Illegal States Unrepresentable</title>
+<link rel="stylesheet" href="../reset.css">
+<link rel="stylesheet" href="../reveal.css">
+<link rel="stylesheet" href="../theme/black.css" id="theme">
+<link rel="stylesheet" href="../theme/theme-override.css">
+<link rel="stylesheet" href="../plugin/highlight/github-dark.css" id="highlight-theme">
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+<section
+	data-markdown
+	data-separator="^\r?\n---\r?\n$"
+	data-separator-vertical="^\r?\n--\r?\n$">
+<script type="text/template">
+
+# Making Illegal States Unrepresentable
+
+## How dependent types make bugs impossible
+
+<!-- .slide: class="center" -->
+
+--
+
+I want to introduce various kinds of types that can be used in programming.
+
+- Simple types
+- Generic types
+- Generalized algebraic data types
+- Dependent types
+- Propositions
+
+C# only supports the first two, but let's make up some syntax to pretend it supports the rest.
+
+[Lean](https://lean-lang.org/about/) is a functional programming language that supports all of these.
+I'll use it to provide real working code.
+
+---
+
+# Prologue: Why Types?
+
+<!-- .slide: class="center" -->
+
+--
+
+Types serve two major purposes:
+
+- Abstraction - humans need to understand code.
+- Static code analysis - computers need to understand code, too.
+
+--
+
+## Abstraction
+
+Types let us make code "about" useful concepts like dates, users, and files.
+We're no longer restricted to thinking about a single kind of data, such as bytes.
+
+Types define which values and operations are valid in a given context.
+We can write code "about" sending an email or cropping an image, but cropping an email is not a valid concept.
+
+To borrow a phrase coined by Yaron Minsky, we can use types to
+[make illegal states unrepresentable](https://blog.janestreet.com/effective-ml-revisited/).
+
+The simplest example is a yes/no flag.
+When everything is made of bytes, there are 256 possible states, but we only want there to be two (yes and no).
+There will be at least 254 illegal or redundant states.
+
+A boolean type solves this problem by having only two possible states, by definition.
+
+This approach is fantastically useful in making code more robust without needing to write a lot of error checking.
+The definitions of types can limit the kinds of mistakes that can be made.
+
+--
+
+## Static analysis
+
+The most directly useful way to use types is to allow the compiler to check code for certain kinds of errors.
+
+```cs
+DateTime MyFunction(int a, string b)
+{
+    return a / b;
+}
+```
+
+This code is syntactically correct, but obvious nonsense.
+You can't divide a number by a string, especially not in a way that produces a date/time.
+
+Understanding what went wrong requires knowing about types.
+Once we have a compiler that knows about types,
+it can check code automatically to stop us when we make that kind of mistake.
+
+--
+
+## Example 1
+
+```cs
+var a = Console.ReadLine();
+var b = Console.ReadLine();
+Console.WriteLine($"Sum: {a + b}");
+```
+
+If you make this mistake, you're not going to notice until you test it, and learn that the sum of 1 and 2 is 12.
+
+If you had used the correct types here, the compiler would have forced you to fix it:
+
+```cs
+int a = int.Parse(Console.ReadLine());
+int b = int.Parse(Console.ReadLine());
+Console.WriteLine($"Sum: {a + b}");
+```
+
+--
+
+## Example 2
+
+```cs
+int Randomize(int input)
+{
+	List<int> list = new List<int>() { 1, 9, 3, 6, 0, 2, 7, 8, 5, 4 };
+	return list[input];
+}
+```
+
+No bonus points for figuring out how to break this.
+It's easy to see that if you pass in anything larger than 9, this is going to throw an exception.
+
+It would be nice to have the compiler also prevent this and only allow inputs within the valid range.
+Unfortunately it's a bit difficult in C#, but by the end I'll show how it can be done in a language with dependent types.
+
+--
+
+## Example 3
+
+```cs
+int Randomize(int input)
+{
+	List<int> list = new List<int>() { 1, 9, 3, 6, 0, 2, 7, 8, 5, 4 };
+	return list.BinarySearch(input);
+}
+```
+
+This one is a bit more insidious.
+`BinarySearch` is supposed to return the index of the item in the list, or a negative number if it's not found.
+1 is the first item in the list, but `list.BinarySearch(1)` returns -6.
+Most of the numbers 0-9 will fail similarly, even though they're all in the list.
+Some of them will work though, with no clear pattern.
+
+What you forgot is that `BinarySearch` requires the list to be sorted.
+If you pass it garbage in, you get garbage out.
+
+This type of error can also be prevented at compile time with dependent types, as you'll see later.
+
+---
+
+# Chapter 1: Simple types
+
+<!-- .slide: class="center" -->
+
+--
+
+We can start with some basic types:
+
+- `int`
+- `string`
+- `bool`
+- `Type`
+
+Lean has them too, just with uppercase names: `Int`, `String`, `Bool`, and `Type`.
+
+We can also combine primitive types to represent more complex objects.
+
+--
+
+## Records
+
+A record combines multiple pieces of data into a single value.
+In C# there are a few ways to build records, but the most common is with a class.
+
+A record type is built by composing other types, like `string` and `int`.
+
+```cs
+class Person
+{
+	public string Name;
+	public int Age;
+}
+```
+
+In Lean, it looks like this:
+
+```hs
+structure Person :=
+(name : String)
+(age : Int)
+```
+
+--
+
+## Functions
+
+A function is a machine that takes some input and produces some output.
+
+We can build a function type by specifying the input and output types.
+
+```cs
+delegate string PersonSerializer(Person person);
+```
+
+In Lean:
+
+```hs
+def PersonSerializer := Person → String
+```
+
+--
+
+## Unions
+
+A union allows several different types of values, but can only hold one at a time.
+
+C# doesn't have union types per se, but we can use something like this to get close:
+
+```cs
+class FlexibleID
+{
+	public int ID;
+	public string NaturalKey;
+	public bool IsID => NaturalKey == null;
+
+	public ID(int id) => ID = id;
+	public ID(string naturalKey) => NaturalKey = naturalKey;
+}
+```
+
+In Lean, the `⊕` operator defines a union type.
+
+```hs
+def FlexibleID := Int ⊕ String
+```
+
+--
+
+## Enums
+
+An enum is a type that can hold one of a fixed set of values.
+
+```cs
+enum Bool
+{
+	True,
+	False,
+}
+```
+
+In Lean, enums are defined by using inductive types.
+
+```hs
+inductive Bool
+| true
+| false
+```
+
+--
+
+## Inductive types
+
+An inductive type is kind of like a enum, but where each value can hold additional data.
+
+If C# had inductive types, they might look something like this:
+
+```cs
+inductive FlexibleID
+{
+	FromID(int id),
+	FromNaturalKey(string naturalKey),
+}
+```
+
+In Lean:
+
+```hs
+inductive FlexibleID
+| fromID (id : Int)
+| fromNaturalKey (naturalKey : String)
+```
+
+--
+
+Inductive types are extremely powerful, and most of the previous ideas are really different kinds of inductive types.
+
+In fact, since inductive types can be recursive, you don't need primitive types like numbers and arrays.
+They can be built from scratch.
+
+Let's build the natural numbers (nonnegative integers):
+
+```cs
+inductive Nat
+{
+	Zero,
+	OnePlus(Nat n),
+}
+```
+
+```hs
+inductive Nat
+| zero
+| onePlus (n : Nat)
+```
+
+--
+
+How about lists?
+
+```cs
+inductive ListOfNats
+{
+	Empty,
+	Add(Nat head, ListOfNats tail),
+}
+```
+
+```hs
+inductive ListOfNats
+| empty
+| add (head : Nat) (tail : ListOfNats)
+```
+
+---
+
+# Chapter 2: Generic types
+
+<!-- .slide: class="center" -->
+
+--
+
+There's a problem with the simple type system we've seen so far.
+We defined a type that can represent a list of numbers, but what if we want a list of strings, or a list of booleans?
+It wouldn't be good to repeat the same basic definition over and over for each possible type.
+
+Generic types solve this problem.
+They let us pass types as parameters, so we can create a version of the generic type for any type we wish.
+
+--
+
+## Records
+
+Records can be generic:
+
+```cs
+class Vector2D<T>
+{
+	public T X;
+	public T Y;
+}
+```
+
+```hs
+structure Vector2D (α) :=
+(x : α)
+(y : α)
+```
+
+--
+
+## Functions
+
+Functions can be generic, too:
+
+```cs
+delegate string Serializer<T>(T value);
+```
+
+```hs
+def Serializer (α) := α → String
+```
+
+--
+
+## Inductive types
+
+Inductive types too:
+
+```cs
+inductive List<T>
+{
+	Empty,
+	Add(T head, List<T> tail),
+}
+```
+
+```hs
+inductive List (α)
+| empty
+| add (head : α) (tail : List α)
+```
+
+---
+
+# Chapter 3: Generalized algebraic data types
+
+<!-- .slide: class="center" -->
+
+--
+
+Let's briefly look at generalized algebraic data types, or GADTs for short.
+GADTs are generic inductive types where different constructors return different types.
+
+Let's imagine we're writing a parser for a programming language, and we want a data type to represent expressions.
+Expressions can have different types, so we should use a generic `Expression` type.
+
+```cs
+inductive Expression<T>
+{
+	Expression<int> IntLiteral(int value),
+	Expression<string> StringLiteral(string value),
+	Expression<int> Add(Expression<int> a, Expression<int> b),
+	Expression<string> ToString(Expression<int> value),
+}
+```
+
+```hs
+inductive Expression : (α : Type) → Type
+| intLiteral (value : Int) : Expression Int
+| stringLiteral (value : String) : Expression String
+| add (a : Expression Int) (b : Expression Int) : Expression Int
+| toString (value : Expression Int) : Expression String
+```
+
+--
+
+We can write a function to evaluate an expression, using pattern matching:
+
+```cs
+T Eval<T>(Expression<T> expression)
+{
+	switch (expression)
+	{
+		case Expression.IntLiteral(int value):
+			return value;
+		case Expression.StringLiteral(string value):
+			return value;
+		case Expression.Add(Expression<int> a, Expression<int> b):
+			return Eval(a) + Eval(b);
+		case Expression.ToString(Expression<int> value):
+			return Eval(value).ToString();
+	}
+}
+```
+
+```hs
+def eval {α} : Expression α → α
+| Expression.intLiteral value => value
+| Expression.stringLiteral value => value
+| Expression.add a b => eval a + eval b
+| Expression.toString value => toString (eval value)
+```
+
+---
+
+# Chapter 4: Dependent types
+
+<!-- .slide: class="center" -->
+
+--
+
+Just like generic types can take types as parameters, dependent types can take values as parameters.
+
+A classic example is a vector, which is a list of a fixed length.
+The length is part of the type itself, not just the object.
+
+Perhaps C#'s syntax could be extended like this:
+
+```cs
+inductive Vector<Type T, Nat N>
+{
+	Vector<T, 0> Empty<T>(),
+	Vector<T, N + 1> Add<T, N>(T head, Vector<T, N> tail),
+}
+```
+
+In Lean, it looks like this:
+
+```hs
+inductive Vector (α : Type) : (n : Nat) → Type
+| empty : Vector α 0
+| add (head : α) (tail : Vector α n) : Vector α (n + 1)
+```
+
+--
+
+If we try to assign a vector of the wrong length, we get a compile error:
+
+```cs
+Vector<int, 3> vector = Vector.Add(1, Vector.Add(2, Vector.Add(3, Vector.Empty())));
+Vector<int, 37> longVector = vector; // Compile error
+```
+
+```hs
+def vector : Vector Int 3 := Vector.add 1 (Vector.add 2 (Vector.add 3 Vector.empty))
+def longVector : Vector Int 37 := vector -- Compile error
+```
+
+--
+
+## Dependent functions
+
+A dependent function is a function where the output type depends on the input value.
+
+For example, we can write a function that initializes a vector with a default value and a length.
+
+```cs
+Vector<T, length> BlankVector<T>(T blankValue, Nat length)
+{
+	switch (length)
+	{
+		case Nat.Zero:
+			return Vector.Empty();
+		case Nat.OnePlus(int n):
+			return Vector.Add(blankValue, BlankVector(blankValue, n));
+	}
+}
+```
+
+Notice that the output type depends on the input value `length`.
+
+```hs
+def blankVector {α : Type} (blankValue : α) : (length : Nat) → Vector α length
+| 0 => Vector.empty
+| n + 1 => Vector.add blankValue (blankVector blankValue n)
+```
+
+--
+
+You could use such a function like this:
+
+```cs
+Vector<int, 3> vector = BlankVector(0, 3);
+Vector<int, 3> longVector = BlankVector(0, 37); // Compile error
+```
+
+```hs
+def vector : Vector Int 3 := blankVector 0 3
+def longVector : Vector Int 3 := blankVector 0 37 -- Compile error
+```
+
+--
+
+Now for that example from earlier.
+The goal is to make a list indexer function where the range is enforced by the compiler.
+
+The first step is to define a type that represents a finite range of numbers.
+That is, a type `Fin<N>` where the only valid values are 0 through N - 1.
+
+```cs
+inductive Fin<Nat N>
+{
+	Fin<N + 1> Zero<N>(),
+	Fin<N + 1> OnePlus<N>(Fin<N> value),
+}
+```
+
+```hs
+inductive Fin : Nat → Type
+| zero {n} : Fin (n + 1)
+| onePlus {n} (value : Fin n) : Fin (n + 1)
+```
+
+Interestingly, there's no way to create a `Fin<0>`. It's an empty type.
+
+--
+
+Now it's possible to restrict the index to less than the length of the list:
+
+```cs
+T Get<T>(List<T> list, Fin<list.Length> index)
+{
+	switch (list, index)
+	{
+		case List.Add(T head, List<T> _), Fin.Zero():
+			return head;
+		case List.Add(T _, List<T> tail), Fin.OnePlus(Fin<list.Length> i):
+			return Get(tail, i);
+	}
+}
+```
+
+```hs
+def get {α} : (list : List α) → Fin (list.length) → α
+| List.add head _, Fin.zero => head
+| List.add _ tail, Fin.onePlus i => get tail i
+```
+
+Note that in our pattern matching, we don't have to consider the case where the list is empty.
+If the list was empty, `index` would be a `Fin<0>`, which has no possible cases.
+Taken together, there is no combination of `list` and `index` where `list` is empty.
+
+---
+
+# Chapter 5: Propositions
+
+<!-- .slide: class="center" -->
+
+--
+
+Propositions are statements of fact that have a truth value. 1 + 1 = 2 is a true proposition, and 2 + 2 = 1 is a false proposition.
+We can write propositions about our code that let us reason about its behaviour.
+
+Propositions can be represented as types whose values are proofs.
+A false proposition is a type with no valid values.
+
+There isn't anything fundamentally different between propositions and other types.
+The difference is mainly about the data being represented. Most types have values that represent some kind of data.
+Proofs, on the other hand, don't carry data.
+The only thing that matters to a proposition is whether some proof exists or not.
+
+--
+
+Let's create a proposition defining even numbers:
+
+```cs
+inductive Even<Nat N>
+{
+	Even<N * 2> Double<N>(),
+}
+```
+
+```hs
+inductive Even : Nat → Type
+| double (n) : Even (n * 2)
+```
+
+Now if we have a value of type `Even<N>`, we know that `N` is even.
+If it's odd, it would have been impossible to construct a proof.
+
+--
+
+Another proposition defines whether one number is less than or equal to another:
+
+```cs
+inductive LessEq<Nat A, Nat B>
+{
+	LessEq<A, A> Equal<A>(),
+	LessEq<A, B + 1> Increment<A, B>(LessEq<A, B> proof),
+}
+```
+
+```hs
+inductive LessEq : Nat → Nat → Type
+| equal (a) : LessEq a a
+| increment {a b} (proof : LessEq a b) : LessEq a (b + 1)
+```
+
+--
+
+Using `LessEq`, we can define what it means for a list to be sorted:
+
+```cs
+inductive Sorted<List<Nat> list>
+{
+	Sorted<List.Empty> Empty,
+	Sorted<List.Add(a, List.Empty())> Single(Nat a),
+	Sorted<List.Add(a, List.Add(b, tail))> Add(
+		Nat a, Nat b, List<Nat> tail, LessEq<a, b> aLessEqB, Sorted<List.Add(b, tail)> tailSorted),
+}
+```
+
+```hs
+inductive Sorted : List Nat → Type
+| empty : Sorted List.empty
+| single (a) : Sorted (List.add a List.empty)
+| add {a b tail} (aLessEqB : LessEq a b) (tailSorted : Sorted (List.add b tail))
+  : Sorted (List.add a (List.add b tail))
+```
+
+--
+
+At this point, the `BinarySearch` problem can be solved just by adding an extra argument to the function:
+
+```cs
+Nat BinarySearch(List<Nat> list, Nat value, Sorted<list> listSorted)
+	...
+```
+
+```hs
+def binarySearch : (list : List Nat) → Nat → Sorted list → Nat
+	...
+```
+
+Now it's impossible to accidentally pass an unsorted list to `BinarySearch`,
+because you'll get stuck trying to provide the last argument.
+
+The body of the function doesn't need to change, because the algorithm is already correct.
+It's just stricter about the inputs it accepts.
+
+---
+
+# Epilogue: So What?
+
+<!-- .slide: class="center" -->
+
+--
+
+Stronger types are all about minimizing the number of ways to make mistakes.
+
+Powerful type systems are used in practice to prove the correctness of important software,
+such as you might find in a nuclear powerplant or commercial airliner.
+
+I'm not trying to tell you that dependent types are the solution to all your problems.
+I'm not even trying to tell you to learn a dependently typed language.
+(OK that's a lie, you totally should.)
+
+Adopting a "strong typing" attitude will help you write more robust code, and I hope this talk has inspired you to
+strive for that.
+
+Strong typing is your friend. Use it. Your compiler might not thank you, but your future self will.
+
+--
+
+If you want to learn more, here are some suggestions:
+
+- [Haskell](https://www.haskell.org/) is a functional programming language with a powerful type system.
+Although it also doesn't support dependent types, it's a huge step up in power from C# in terms of the type system.
+- [Lean](https://lean-lang.org/) is my favourite programming language.
+It fully supports dependent types, and it's also used by many mathematicians to write formal proofs.
+
+For an extra funky example of dependent types, check out Brian McKenna's [video](https://www.youtube.com/watch?v=fVBck2Zngjo)
+on type-safe string formatting.
+That is, what if you could write a version of `Console.WriteLine` that fails to compile if you miss an argument?
+With dependent types, it's possible to control the entire argument list based on the format string!
+
+```cs
+Console.WriteLine("Processed {0} out of {1} items", count); // Compile error
+```
+
+---
+
+# Thank You
+
+<!-- .slide: class="center" -->
+
+</script>
+</section>
+</div>
+</div>
+<script src="../reveal.js"></script>
+<script src="../plugin/markdown/markdown.js"></script>
+<script src="../plugin/highlight/highlight.js"></script>
+<script>
+Reveal.initialize({
+	hash: true,
+	center: false,
+	width: 800,
+	height: 450,
+	maxScale: 4,
+	plugins: [RevealMarkdown, RevealHighlight]
+}).then(autoFragment);
+
+function autoFragment()
+{
+	for (const element of document.querySelectorAll(".reveal p:not(:first-child), .reveal pre:not(:first-child), .reveal ul:not(:first-child), .reveal li:not(:first-child)"))
+	{
+		element.classList.add("fragment");
+	}
+}
+
+Reveal.on("fragmentshown", event => setTimeout(() => event.fragment.classList.remove("fragment"), 500));
+</script>
+</body>
+</html>
